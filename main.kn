@@ -1,0 +1,236 @@
+var wndMain: wnd@Wnd
+var drawMain: wnd@Draw
++var WIDTH: int :: 1600
++var HEIGHT: int :: 900
+
+const flag1: int :: 0
+const flag2: int :: 3
+const hidden_num: int :: 2
+
++class Obj()
+	+var x: float
+	+var y: float
+	+var width: float
+	+var vx: float
+	+var vy: float
+	+func init(x: float, y: float, vx: float, vy: float, width: float)
+		do me.x :: x
+		do me.y :: y
+		do me.vx :: vx
+		do me.vy :: vy
+		do me.width :: width
+	end func
+end class
+
+class Game()
+	var goaltime: int
+	+var p: @Obj
+	+var target: @Obj
+	+var obstacle: @Obj
+	var flag: int
+	var count: int
+	var time: int
+	
+	+var learn: \nn@NN
+	+var learn2: \nn2@NN
+	*func ctor()
+		do me.learn :: #\nn@NN
+		do me.learn2 :: #\nn2@NN
+		
+		do me.flag :: 1
+		do me.p :: #@Obj
+		do me.target :: #@Obj
+		do me.obstacle :: #@Obj
+		do me.p.init(@WIDTH $ float / 2.0, @HEIGHT $ float / 3.0 * 2.0, 0.0, 0.0, 50.0)
+		do me.target.init(@WIDTH $ float * 2.0 / 3.0, @HEIGHT $ float * 2.0 / 3.0, 0.0, 0.0, 50.0)
+		do me.obstacle.init(@WIDTH $ float / 3.0, @HEIGHT $ float * 2.0 / 3.0, 0.0, 0.0, 50.0)
+	end func
+	func init()
+		var initF: int
+		if(me.p.x < -100.0 | me.p.x > @WIDTH $ float + 100.0)
+			do initF :: 1
+		end if
+		if(me.p.x > me.target.x & me.p.x < me.target.x + me.target.width)
+			do me.goaltime :+ 1
+			if(me.goaltime > 100)
+				do initF :: 1
+			end if
+		end if
+		if(me.time > 300)
+			do initF :: 1
+		end if
+		if(initF = 1)
+			do me.p.init(@WIDTH $ float / 2.0, @HEIGHT $ float / 3.0 * 2.0, 0.0, 0.0, 50.0)
+			do me.count :+ 1
+			do dbg@print("\{me.count}\n")
+			do me.goaltime :: 0
+			do me.time :: 0
+		end if
+	end func
+	+func act(action: int)
+		switch(action)
+		case 0
+		case 1
+			do me.p.vx :: -10.0
+		case 2
+			do me.p.vx :: 10.0
+		end switch
+	end func
+	func control(flag: int)
+		var action: int
+		switch(flag)
+		case 0
+			if(input@key(%left) = true)
+				do action :: 1
+			end if
+			if(input@key(%right) = true)
+				do action :: 2
+			end if
+		default
+			;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;強化学習↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+			;next(行動選択)
+			var q_max: float :: 0.0
+			for a(0, 2)
+				var q_next: []float :: #[3]float
+				var px: float :: 0.0
+				switch(a)
+				case 0
+					do px :: me.p.x + me.p.width / 2.0
+				case 1
+					do px :: me.p.x + me.p.width / 2.0 - 10.0
+				case 2
+					do px :: me.p.x + me.p.width / 2.0 + 10.0
+				end switch
+				var input: []float :: [px, me.target.x + me.target.width / 2.0, me.obstacle.x + me.obstacle.width / 2.0]
+				var out: []float
+				switch(@hidden_num)
+				case 1
+					do out :: me.learn.nn(input, [0.0], @flag1, 0)
+				case 2
+					do out :: me.learn2.nn(input, [0.0], @flag1, @flag2, 0)
+				end switch
+				
+				do q_next[a] :: out[0]
+				if(q_max < q_next[a] | a = 0)
+					do q_max :: q_next[a]
+					;行動選択
+					do action :: a
+				end if
+			end for
+			;now
+			var input: []float :: [me.p.x + me.p.width / 2.0, me.target.x + me.target.width / 2.0, me.obstacle.x + me.obstacle.width / 2.0]
+			var out: []float
+			switch(@hidden_num)
+			case 1
+				do out :: me.learn.nn(input, [0.0], @flag1, 0)
+			case 2
+				do out :: me.learn2.nn(input, [0.0], @flag1, @flag2, 0)
+			end switch
+			
+			var Q_now: float :: out[0]
+			var r: float :: me.get_reward(me.p, me.target, me.obstacle)
+			var Q_next: float :: Q_now + 0.2 * (r + 0.8 * q_max - Q_now)
+			switch(@hidden_num)
+			case 1
+				do me.learn.nn(input, [Q_next], @flag1, 1)
+			case 2
+				do me.learn2.nn(input, [Q_next], @flag1, @flag2, 1)
+			end switch
+			
+			
+			if(q_max.abs() <= 0.000001)
+				do action :: lib@rnd(1, 2)
+			end if
+			
+			if(input@key(%left) = true)
+				do action :: 1
+			end if
+			if(input@key(%right) = true)
+				do action :: 2
+			end if
+			;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;強化学習↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+		end switch
+		do me.act(action)
+	end func
+	
+	func update()
+		do me.p.x :+ me.p.vx
+		do me.p.y :+ me.p.vy
+	end func
+	+func draw()
+		;target
+		do draw@rect(me.target.x, me.target.y, me.target.width, me.target.width, 0xFFFFFF00)
+		;obstacle
+		do draw@rect(me.obstacle.x, me.obstacle.y, me.obstacle.width, me.obstacle.width, 0xFFFFFFFF)
+		;graph
+		for x(0, @WIDTH, 10)
+			var q: float :: 0.0
+			var input: []float :: [x $ float, me.target.x + me.target.width / 2.0, me.obstacle.x + me.obstacle.width / 2.0]
+			var out: []float
+			switch(@hidden_num)
+			case 1
+				do out :: me.learn.nn(input, [0.0], @flag1, 0)
+			case 2
+				do out :: me.learn2.nn(input, [0.0], @flag1, @flag2, 0)
+			end switch
+			
+			do q :: out[0]
+			do draw2d@circle(x $ float, q * 10.0 + @HEIGHT $ float / 2.0, 5.0, 5.0, 0xFFFFFFFF)
+		end for
+		do draw@line(0.0, @HEIGHT $ float / 2.0, @WIDTH $ float, @HEIGHT $ float / 2.0, 0xFFFFFFFF)
+		;player
+		do draw@rect(me.p.x, me.p.y, me.p.width, me.p.width, 0xFFFF1111)
+		;land
+		do draw@line(0.0, @HEIGHT $ float / 3.0 * 2.0 + me.p.width, @WIDTH $ float, @HEIGHT $ float / 3.0 * 2.0 + me.p.width, 0xFFFFFFFF)
+	end func
+	+func mainloop()
+		while(wnd@act())
+			if(me.learn.train > me.count)
+				do me.time :+ 1
+				do me.control(me.flag)
+				do me.update()
+				do me.init()
+			else
+				do me.time :+ 1
+				do me.control(me.flag)
+				do me.update()
+				do me.draw()
+				do me.init()
+				do draw@render(60)
+			end if
+		end while
+	end func
+	
+	
+	+func get_reward(p: @Obj, t: @Obj, o: @Obj): float
+		var reward: float
+		var v: float :: 15.0
+		var x: float :: p.x + p.width / 2.0
+		if((t.x + t.width / 2.0 - x).abs() < t.width / 2.0 + v)
+			do reward :+ 4.0
+		end if
+		if(x < 130.0 | x > @WIDTH $ float - 30.0)
+			do reward :+ -5.0
+		end if
+		if((o.x + o.width / 2.0 - x).abs() < o.width / 2.0 + v)
+			do reward :+ -5.0
+		end if
+		ret reward
+	end func
+	
+end class
+
+func main()
+	{
+	var result: []char :: wndex@inputBox(null, "学習回数を入力してください。", "確認", "0", null)
+	if(result =& null)
+		ret
+	end if
+}
+	do @wndMain :: wnd@makeWnd(null, %aspect, @WIDTH, @HEIGHT, "Title")
+	do @drawMain :: wnd@makeDraw(@wndMain, 0, 0, @WIDTH, @HEIGHT, %scale, %scale, false)
+	var game: @Game :: #@Game
+	var existed: bool
+	;do game.learn.train :: result.toInt(&existed)
+	do game.mainloop()
+end func

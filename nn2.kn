@@ -1,0 +1,279 @@
+;隠れ層を2つに！
++class NN()
+	const input_size: int :: 3
+	const hidden_size_1: int :: 100
+	const hidden_size_2: int :: 10
+	const output_size: int :: 1
+	const eta: float :: 1.0e-2
+	const b: float :: 0.0
+	;0 sigmoid
+	;1 ReLU
+	;2 tanh
+	;3 step
+	{
+	;ReLUの重みの変化量の上限
+	const clip_hh: float :: 0.05
+	const clip_ih: float :: 0.05
+	}
+	var x_list: list<float>
+	var y_list: list<float>
+	var t_list: list<float>
+	
+	var input: []float
+	var hidden_1: []float
+	var hidden_2: []float
+	var output: []float
+	var weight_ih: [][]float
+	var weight_hh: [][]float
+	var weight_ho: [][]float
+	
+	var teacher: []float
+	
+	*func ctor()
+		do me.x_list :: #list<float>
+		do me.y_list :: #list<float>
+		do me.t_list :: #list<float>
+		;入力層と隠れ層の[0]には1
+		;重みの[0]にはバイアスを用意する
+		do me.input :: #[input_size + 1]float
+		do me.hidden_1 :: #[hidden_size_1 + 1]float
+		do me.hidden_2 :: #[hidden_size_2 + 1]float
+		do me.output :: #[output_size]float
+		do me.teacher :: #[output_size]float
+		do me.weight_ih :: #[input_size + 1, hidden_size_1 + 1]float
+		do me.weight_hh :: #[hidden_size_1 + 1, hidden_size_2 + 1]float
+		do me.weight_ho :: #[hidden_size_2 + 1, output_size]float
+		;1の出力
+		do me.input[0] :: 1.0
+		do me.hidden_1[0] :: 1.0
+		do me.hidden_2[0] :: 1.0
+		;バイアスの代入
+		for h(1, hidden_size_1)
+			do me.weight_ih[0][h] :: b
+		end for
+		for h(1, hidden_size_2)
+			do me.weight_hh[0][h] :: b
+		end for
+		for o(0, output_size - 1)
+			do me.weight_ho[0][o] :: b
+		end for
+		;重みの初期化
+		;全て同じ値を使うと更新してもすべて同じ値になってしまい意味がなくなる！！！
+		for i(1, input_size)
+			for h1(1, hidden_size_1)
+				do me.weight_ih[i][h1] :: lib@rndFloat(-10.0, 10.0)
+				for h2(1, hidden_size_2)
+					do me.weight_hh[h1][h2] :: lib@rndFloat(-10.0, 10.0)
+					for o(0, output_size - 1)
+						do me.weight_ho[h2][o] :: lib@rndFloat(-10.0, 10.0)
+					end for
+				end for
+			end for
+		end for
+	end func
+	
+	+func nn(input: []float, teacher: []float, flag1: int, flag2: int, trainF: int): []float
+		;入力
+		for i(1, input_size)
+			do me.input[i] :: input[i - 1]
+		end for
+		;教師
+		for o(0, output_size - 1)
+			do me.teacher[o] :: teacher[o]
+		end for
+		;入力層から隠れ層1へ
+		for h(1, hidden_size_1)
+			var hid: float :: 0.0
+			for i(0, input_size)
+				do hid :+ me.input[i] * me.weight_ih[i][h]
+			end for
+			switch(flag1)
+			case 0
+				do me.hidden_1[h] :: me.sigmoid(hid)
+			case 1
+				do me.hidden_1[h] :: me.ReLU(hid)
+			case 2
+				do me.hidden_1[h] :: me.tanh(hid)
+			case 3
+				do me.hidden_1[h] :: me.step(hid)
+			end switch
+		end for
+		;隠れ層1から隠れ層2へ
+		for h2(1, hidden_size_2)
+			var hid: float :: 0.0
+			for h1(0, hidden_size_1)
+				do hid :+ me.hidden_1[h1] * me.weight_hh[h1][h2]
+			end for
+			switch(flag2)
+			case 0
+				do me.hidden_2[h2] :: me.sigmoid(hid)
+			case 1
+				do me.hidden_2[h2] :: me.ReLU(hid)
+			case 2
+				do me.hidden_2[h2] :: me.tanh(hid)
+			case 3
+				do me.hidden_2[h2] :: me.step(hid)
+			end switch
+		end for
+		;隠れ層2から出力層へ
+		for o(0, output_size - 1)
+			var out: float :: 0.0
+			for h(0, hidden_size_2)
+				do out :+ me.hidden_2[h] * me.weight_ho[h][o]
+			end for
+			do me.output[o] :: out
+		end for
+		;重みの更新
+		if(trainF = 1)
+			do me.update_w(flag1, flag2)
+		end if
+		ret me.output
+	end func
+	
+	+func update_w(flag1: int, flag2: int)
+		;二乗誤差の勾配(の一部)
+		var dE: float
+		do dE :: me.d_MSE(me.output, me.teacher)
+		const clip: float :: 1.0e+100
+		if(dE > clip)
+			do dE :: clip
+		elif(dE < -clip)
+			do dE :: -clip
+		end if
+		;;;;↑↑クリッピング↑
+		for o(0, output_size - 1)
+			;出力層と隠れ層2の間の重みとバイアスの更新
+			for h2(0, hidden_size_2)
+				var dw_ho: float :: -eta * dE * me.hidden_2[h2]
+				do me.weight_ho[h2][o] :+ dw_ho
+				;隠れ層1と隠れ層2の間の重みとバイアスの更新
+				for h1(0, hidden_size_1)
+					var df2: float
+					var dw_hh: float
+					switch(flag2)
+					case 0
+						;sigmoid
+						do df2 :: me.d_sigmoid(me.hidden_2[h2])
+					case 1
+						;ReLU
+						do df2 :: me.hidden_2[h2] > 0.0 ?(me.hidden_2[h2], 0.0)
+					case 2
+						;tanh
+						do df2 :: me.d_tanh(me.hidden_2[h2])
+					case 3
+						;step
+						do df2 :: me.hidden_2[h2] > 0.0 ?(me.hidden_2[h2], 0.0)
+					end switch
+					do dw_hh :: -eta * dE * me.weight_ho[h2][o] * (df2 * me.hidden_1[h1])
+					do me.weight_hh[h1][h2] :+ dw_hh
+					;隠れ層1と入力層の間の重みとバイアスの更新
+					for i(0, input_size)
+						var dw_ih: float
+						var df1: float
+						switch(flag2)
+						case 0
+							;sigmoid
+							do df1 :: me.d_sigmoid(me.hidden_1[h1])
+						case 1
+							;ReLU
+							do df1 :: me.hidden_1[h1] > 0.0 ?(me.hidden_1[h1], 0.0)
+						case 2
+							;tanh
+							do df1 :: me.d_tanh(me.hidden_1[h1])
+						case 3
+							;step
+							do df1 :: me.hidden_1[h1] > 0.0 ?(me.hidden_1[h1], 0.0)
+						end switch
+						do dw_ih :: -eta * dE * me.weight_ho[h2][o] * (df2 * me.weight_hh[h1][h2]) * (df1 * me.input[i])
+						do me.weight_ih[i][h1] :+ dw_ih
+					end for
+				end for
+			end for
+		end for
+	end func
+	
+	+func MSE(out: []float, tea: []float): float
+		var sum: float
+		for o(0, output_size - 1)
+			do sum :+ (out[o] - tea[o]) ^ 2.0
+		end for
+		ret sum / output_size $ float
+	end func
+	
+	+func d_MSE(out: []float, tea: []float): float
+		var sum: float
+		for o(0, output_size - 1)
+			do sum :+ (out[o] - tea[o])
+		end for
+		ret sum / (output_size * hidden_size_2) $ float
+	end func
+	
+	+func tanh(x: float): float
+		ret lib@tanh(x)
+	end func
+	+func d_tanh(f: float): float
+		ret 1.0 - f ^ 2.0
+	end func
+	
+	+func step(x: float): float
+		ret x > 0.0 ?(1.0, 0.0)
+	end func
+	
+	+func ReLU(x: float): float
+		ret x > 0.0 ?(x / 100.0, 0.0)
+	end func
+	
+	+func sigmoid(x: float): float
+		ret 1.0 / (1.0 + lib@e ^ -(x / 100.0))
+	end func
+	
+	+func d_sigmoid(f: float): float
+		ret f * (1.0 - f)
+	end func
+	
+	
+	+func show()
+		;入力
+		for i(0, input_size)
+			do dbg@print("in[\{i}]:\{me.input[i]}\n")
+		end for
+		;重み_ih
+		for i(0, input_size)
+			for h(0, hidden_size_1)
+				do dbg@print("w_ih[\{i}][\{h}]:\{me.weight_ih[i][h]}\n")
+			end for
+		end for
+		;隠れ1
+		for h(0, hidden_size_1)
+			do dbg@print("h1[\{h}]:\{me.hidden_1[h]}\n")
+		end for
+		;重み_hh
+		for h1(0, hidden_size_1)
+			for h2(0, hidden_size_2)
+				do dbg@print("w_ih[\{h1}][\{h2}]:\{me.weight_hh[h1][h2]}\n")
+			end for
+		end for
+		;隠れ2
+		for h(0, hidden_size_2)
+			do dbg@print("h2[\{h}]:\{me.hidden_2[h]}\n")
+		end for
+		;重み_ho
+		for h(0, hidden_size_2)
+			for o(0, output_size - 1)
+				do dbg@print("w_ho[\{h}][\{o}]:\{me.weight_ho[h][o]}\n")
+			end for
+		end for
+		;出力
+		for o(0, output_size - 1)
+			do dbg@print("out[\{o}]:\{me.output[o]}\n")
+		end for
+		;教師
+		for o(0, output_size - 1)
+			do dbg@print("t[\{o}]:\{me.teacher[o]}\n")
+		end for
+		;誤差関数
+		var error: float :: me.MSE(me.output, me.teacher)
+		do dbg@print("err:\{error}\n")
+	end func
+	
+end class
